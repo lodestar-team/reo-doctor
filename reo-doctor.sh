@@ -54,13 +54,20 @@ warn(){ echo "  ${Y}!${X} $*"; }
 bad(){  echo "  ${R}✗${X} $*"; }
 hdr(){  echo; echo "${B}$*${X}"; }
 lc(){ echo "$1" | tr '[:upper:]' '[:lower:]'; }
-call(){ cast call "$1" "$2" "${@:3}" --rpc-url "$RPC" 2>/dev/null; }
+call(){ cast call "$1" "$2" "${@:3}" --rpc-url "$RPC" 2>/dev/null || true; }
 
 echo "${B}reo-doctor${X} ${D}· $NETWORK · indexer $INDEXER${X}"
 
 # ---- 1. oracle wiring --------------------------------------------------
 hdr "Oracle wiring (RewardsManager $REWARDS_MANAGER)"
 ACTIVE=$(lc "$(call "$REWARDS_MANAGER" 'getProviderEligibilityOracle()(address)')")
+if [[ -z "$ACTIVE" ]]; then
+  warn "RewardsManager has no eligibility oracle wired — REO is not active on $NETWORK yet."
+  echo "  ${D}(The REO contracts may be deployed but not yet connected to RewardsManager.)${X}"
+  echo; echo "${B}Verdict${X}"
+  echo "  Nothing to test here yet. REO is currently live on Arbitrum Sepolia (testnet)."
+  exit 0
+fi
 REVERT=$(call "$REWARDS_MANAGER" 'getRevertOnIneligible()(bool)')
 
 MODE=unknown
