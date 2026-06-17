@@ -1,3 +1,5 @@
 .env
 *.log
 NOTES.md
+.wallet/
+GRAPHOPS_REQUEST.md
