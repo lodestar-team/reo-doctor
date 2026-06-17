@@ -47,8 +47,9 @@ CUT=$(cast call "$DM" "getFishermanRewardCut()(uint32)" --rpc-url "$L" | awk '{p
 say "1. Provision $(cast from-wei "$STAKE") GRT to SubgraphService"
 send "$GRT" "approve(address,uint256)" "$STAKING" "$STAKE"
 send "$STAKING" "stake(uint256)" "$STAKE"
-if cast call "$STAKING" "getProvision(address,address)((uint256,uint256,uint256,uint256,uint256,uint256,uint64,uint64,uint256))" "$ME" "$SS" --rpc-url "$L" | grep -q "^($STAKE,"; then
-  pass "provision already present"
+PROV_TOKENS=$(cast call "$STAKING" "getProvision(address,address)((uint256,uint256,uint256,uint256,uint256,uint256,uint64,uint64,uint256))" "$ME" "$SS" --rpc-url "$L" | tr -d '(' | awk -F'[, ]' '{print $1}')
+if [[ "${PROV_TOKENS:-0}" != "0" ]]; then
+  pass "provision already present ($(cast from-wei "$PROV_TOKENS") GRT)"
 else
   send "$STAKING" "provision(address,address,uint256,uint32,uint64)" "$ME" "$SS" "$STAKE" "$CUT" "$THAW" || fail "provision failed"
   pass "provisioned (cut=$CUT thawing=$THAW)"
