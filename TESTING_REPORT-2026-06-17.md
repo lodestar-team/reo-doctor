@@ -17,9 +17,10 @@ re-enabling eligibility restores collection. The exact revert string and POI-con
 hashes were confirmed on-chain.
 
 **Honest scope** — what was tested *where*:
-- **Live Arbitrum Sepolia**: baseline (stake/provision/register/allocate), Set 2m and 4m.
-  Set 3m's live revert is **pending an epoch roll** (allocation maturity); the premature run
-  produced finding **F1**.
+- **Live Arbitrum Sepolia**: baseline (stake/provision/register/allocate), Sets 2m, 3m, 4m.
+  Set 3m was run twice on the same allocation: at epoch 11971 (birth epoch) it deferred as
+  `ALLOCATION_TOO_YOUNG` with **no revert**, and at epoch 11972 (mature) it **reverted** with
+  `Indexer not eligible for rewards` — demonstrating finding **F1** both ways, live.
 - **Local fork** (the rest): production REO path (Sets 2–5 + fail-open), subgraph denial
   (Cycles 2–5 + 6.4), and reward conditions (POI matrix, reclaim config, below-min-signal).
   Done on a fork because they need coordinator roles (oracle/SAO/governor) and time-travel.
@@ -82,8 +83,8 @@ Funded by Ørjan with 100k GRT + ETH to indexer
 | Register | `register(url, geohash, 0x0)` | ✅ tx `0x43d7cddf…8896` |
 | Allocate ×3 | `startService` on 3 signalled deployments, 30k each (EIP-712 proof) | ✅ allocs `0xdFd9…c446`, `0x9cF3…F33d`, `0x102d…d207` |
 | **Set 2m** | mock eligible → `collect(IndexingRewards)` | ✅ collect succeeded |
-| **Set 3m** | `setEligible(false)` → collect (allocation in birth epoch) | ⚠️ succeeded with **0** rewards, **no revert** — see **F1** |
-| **Set 3m (mature)** | re-run once `currentEpoch > createdAtEpoch` | ⏳ pending epoch roll (11971 → 11972) |
+| **Set 3m** (birth epoch 11971) | `setEligible(false)` → collect | ⚠️ succeeded with **0** rewards, **no revert** (`ALLOCATION_TOO_YOUNG`) — see **F1** |
+| **Set 3m** (mature, epoch 11972) | `setEligible(false)` → collect | ✅ **reverts** `Indexer not eligible for rewards` |
 | **Set 4m** | `setEligible(true)` → collect | ✅ collect succeeded |
 
 The Set 3m anomaly is **not** a contract bug: the allocation was still in its creation epoch

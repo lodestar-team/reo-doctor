@@ -32,8 +32,7 @@ Plans: `IndexerTestGuide.md` (mock Sets 2m–4m, production Sets 2–5) on PR #1
 | Step | Where | Status | Observation |
 |---|---|---|---|
 | **2m** collect while eligible | live + fork | ✅ | non-zero rewards; eligible collect succeeds |
-| **3m** toggle ineligible → collect reverts | fork | ✅ | reverts `Indexer not eligible for rewards` (allocation mature) |
-| **3m** (same, on live) | live | ⚠️→⏳ | **Premature run succeeded with 0 rewards, did NOT revert** — allocation was in its birth epoch (`ALLOCATION_TOO_YOUNG`). See **F1**. Re-running once `currentEpoch > createdAtEpoch` (epoch roll in progress). |
+| **3m** toggle ineligible → collect reverts | live + fork | ✅ | **live**: mature allocation (epoch 11972) reverts `Indexer not eligible for rewards`. Premature run (epoch 11971) deferred as `ALLOCATION_TOO_YOUNG` with no revert — **F1**, now demonstrated both ways on the same live allocation. |
 | **4m** re-enable → collect (recovery) | live + fork | ✅ | collect succeeds, full rewards |
 
 ## Production oracle path — Sets 2–5 + fail-open (self-served on fork)

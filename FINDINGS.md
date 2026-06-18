@@ -24,11 +24,17 @@ returns 0 without consulting eligibility:
 - `STALE_POI` — `now - max(createdAt, lastPOIPresentedAt) > maxPOIStaleness`
 - `SUBGRAPH_DENIED`
 
-**Reproduced (live Sepolia, 2026-06-17)**: indexer `0xfa82…a249`, mock eligibility set `false`,
-`revertOnIneligible=true`, ~8.4 GRT of *projected* rewards (`getRewards`), allocation opened in
-the current epoch (`currentEpoch == createdAtEpoch == 11971`). `collect(IndexingRewards)`
-**succeeded**, payout event amount = `0`, **no revert**. The revert only manifests once the
-allocation is mature (`currentEpoch > createdAtEpoch`), non-stale, and presents a non-zero POI.
+**Reproduced both ways on the same live allocation** (Sepolia, indexer `0xfa82…a249`, mock
+eligibility `false`, `revertOnIneligible=true`):
+- **Epoch 11971 (birth epoch, `currentEpoch == createdAtEpoch`)**: `collect` **succeeded**,
+  payout = `0`, **no revert**. POIPresented condition = `ALLOCATION_TOO_YOUNG`
+  (`0x2954e3d6…`, decoded from the on-chain event).
+- **Epoch 11972 (mature)**: same indexer, same allocation, same ineligible state — `collect`
+  **reverted** with `Indexer not eligible for rewards`.
+
+So the revert manifests only once the allocation is mature, non-stale, and presents a non-zero
+POI — confirming the precedence and that the earlier "no revert" was the deferral path, not a
+broken gate.
 
 **Source** (`graphprotocol/contracts`, live branch `deployment/testnet/2026-06-09/gip-0088`):
 - `packages/subgraph-service/contracts/libraries/AllocationHandler.sol` `presentPOI` — condition
