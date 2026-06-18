@@ -22,6 +22,18 @@ ALLOC=$(cat testnet/logs/alloc-1.addr)
 
 if [[ -t 1 ]]; then B=$'\e[1m'; G=$'\e[32m'; R=$'\e[31m'; X=$'\e[0m'; else B=; G=; R=; X=; fi
 pass(){ echo "  ${G}✓${X} $*"; }; fail(){ echo "  ${R}✗${X} $*"; }
+# Maturity guard (see FINDINGS.md F1): the ineligible-collect revert only fires once the
+# allocation is mature. While currentEpoch <= createdAtEpoch the collect succeeds with 0
+# rewards and does NOT revert (ALLOCATION_TOO_YOUNG precedes the eligibility check).
+EM=0x88b3C7f37253bAA1A9b95feAd69bD5320585826D
+CUR=$(cast call "$EM" "currentEpoch()(uint256)" --rpc-url "$RPC" | awk '{print $1}')
+CREATED=$(cat testnet/logs/created.epoch 2>/dev/null || echo 0)
+if [[ "$CREATED" != "0" && "$CUR" -le "$CREATED" ]]; then
+  echo "${R}⚠ allocation too young${X}: currentEpoch=$CUR, createdAtEpoch=$CREATED."
+  echo "  Set 3m will NOT revert yet (it returns 0, no revert). Wait for epoch > $CREATED, then re-run."
+  exit 2
+fi
+
 CDATA=$(cast abi-encode "f(address,bytes32,bytes)" "$ALLOC" "$POI" 0x)
 collect(){ cast send "$SS" "collect(address,uint8,bytes)" "$ME" 2 "$CDATA" --private-key "$KEY" --rpc-url "$RPC" 2>&1; }
 toggle(){ cast send "$MOCK" "setEligible(bool)" "$1" --private-key "$KEY" --rpc-url "$RPC" >/dev/null 2>&1; }

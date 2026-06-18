@@ -53,7 +53,27 @@ on mainnet; live testing is Sepolia-only.
 
 ---
 
-## Test results (local fork, reproduced cold-start)
+## Test results — live Arbitrum Sepolia
+
+Funded by GraphOps (Ørjan) with 100k GRT + ETH to indexer
+`0xfa827db4a3fa4e5403701c728198e102897aa249`.
+
+| Step | Action | Result |
+|---|---|---|
+| Provision | stake 100k → `provision(SS, 100k, cut=500000, thaw=28800)` | ✅ tx `0x7de9c4ea…8308` |
+| Register | `register(url, geohash, 0x0)` | ✅ tx `0x43d7cddf…8896` |
+| Allocate ×3 | `startService` on 3 signalled deployments, 30k each (EIP-712 proof) | ✅ allocs `0xdFd9…c446`, `0x9cF3…F33d`, `0x102d…d207` |
+| **Set 2m** | mock eligible → `collect(IndexingRewards)` | ✅ collect succeeded |
+| **Set 3m** | `setEligible(false)` → collect (allocation in birth epoch) | ⚠️ succeeded with **0** rewards, **no revert** — see **F1** |
+| **Set 3m (mature)** | re-run once `currentEpoch > createdAtEpoch` | ⏳ pending epoch roll (11971 → 11972) |
+| **Set 4m** | `setEligible(true)` → collect | ✅ collect succeeded |
+
+The Set 3m anomaly is **not** a contract bug: the allocation was still in its creation epoch
+(`ALLOCATION_TOO_YOUNG`), so the collect distributed 0 and never reached the eligibility gate.
+It is documented as finding **F1** and the collect harness now guards against running too early.
+The genuine revert is corroborated on the fork (below), where the allocation was mature.
+
+## Corroboration — local fork (mature allocation, reproduced cold-start)
 
 | Step | Action | Result |
 |---|---|---|
@@ -76,16 +96,12 @@ are preserved, not zeroed or reclaimed; on re-eligibility they are collectable i
 
 ---
 
-## Documentation findings (for `IndexerTestGuide.md` / PR #1345)
+## Findings
 
-| # | Sev | Where | Finding |
-|---|-----|-------|---------|
-| 1 | med | IndexerTestGuide §Env (prod path) | States production `eligibilityPeriod` is "10–15 minutes"; on-chain REO-A reads **14 days** (`1209600`), matching TestnetDetails. A reader expects Set 3's "wait for expiry" to be quick. Clarify the coordinator overrides the period for the production path. |
-| 2 | med | IndexerTestGuide env block | `SUBGRAPH_SERVICE` is used in Set 3.3 and the denial section but never exported. Add `export SUBGRAPH_SERVICE=0xc24a…f26b`. |
-| 3 | low | IndexerTestGuide §Mock sets (~L436) | Broken sentence: "On Arbitrum Sepolia the RewardsManager the mock." (missing verb). |
-| 4 | low | TestnetDetails (Gateway row) vs curl example / `indexer-status.sh` | Gateway row says `gateway.testnet.thegraph.com`; the examples query `gateway.thegraph.com`. Clarify which resolves the testnet network subgraph. |
-| 5 | nit | IndexerTestGuide vs `indexer-status.sh` | `graphNetwork(id:"1")` vs `graphNetworks{…}` — pick one. |
-| 6 | nit | TestnetDetails (mock note) | Make explicit the mock keys eligibility off `msg.sender` = the **indexer wallet**, often distinct from the operator wallet that signs closes. |
+Issues are tracked separately in **[`FINDINGS.md`](FINDINGS.md)** to keep this report to
+methodology + results. Headline: one validated test-guide finding (F1 — Set 3m silently
+succeeds with 0 rewards, instead of reverting, on an immature/stale allocation; *correct*
+contract behaviour but a real documentation trap) plus six documentation nits (F2–F7).
 
 ---
 
