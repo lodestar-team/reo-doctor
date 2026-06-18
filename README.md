@@ -75,10 +75,39 @@ It never asks for, reads, or sends a private key.
 Baked in per network, verified against the GIP-0088 deployment details. Override the RPC
 with `RPC_URL` if you run your own node.
 
+## Also in this repo: a REO test harness
+
+Be aware before cloning: most of this repo by volume is **not** the `reo-doctor.sh` tool —
+it's a harness built while helping test the REO upgrade (PR #1345). Two distinct things,
+one repo:
+
+- **`reo-doctor.sh`** — the read-only indexer tool described above.
+- **`playground/`** — a local `anvil`-fork sandbox + scenario scripts that reproduce the REO
+  test plans against the *real* Sepolia contracts, with no testnet GRT or coordinator access
+  required (it impersonates the needed roles and time-travels on the fork):
+  - `fund-fork.sh` — fork Sepolia + mint test GRT
+  - `scenario-reo.sh` — mock-oracle eligibility (Sets 2m–4m)
+  - `scenario-reo-production.sh` — production oracle (Sets 2–5 + fail-open)
+  - `scenario-subgraph-denial.sh` — denial freeze/defer/undeny (Cycles 2–5 + precedence)
+  - `scenario-rewards-conditions.sh` — POI condition matrix, reclaim config, below-min-signal
+- **`testnet/`** — scripts for the live-Sepolia runs.
+- **Reports** — [`TESTING_REPORT-2026-06-17.md`](TESTING_REPORT-2026-06-17.md) (methodology),
+  [`TEST_EXECUTION_LOG.md`](TEST_EXECUTION_LOG.md) (per-step matrix, honest about what was and
+  wasn't run), [`FINDINGS.md`](FINDINGS.md) (validated issues).
+
+### What was actually tested
+
+Comprehensive coverage of REO-specific behaviour — **not** 100% of every step across all five
+plans. Live Sepolia: baseline + Sets 2m/4m (3m pending an epoch roll). Fork: production path,
+denial, and reward conditions. Not run: full BaselineTestPlan, UI/Explorer verification, some
+CLI-driven lifecycle/observability steps, and the zero-global-signal cycle. The execution log
+is the source of truth.
+
 ## Status
 
-Early but working. Roadmap: per-allocation `STALE_POI` countdown, JSON output mode, and a
-watch mode for continuous monitoring. Issues and PRs welcome.
+`reo-doctor.sh` is early but working. The harness reproduces its scenarios cold. Roadmap for
+the tool: per-allocation `STALE_POI` countdown, JSON output, and a watch mode. Issues and PRs
+welcome.
 
 ## Licence
 

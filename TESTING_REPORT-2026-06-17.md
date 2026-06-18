@@ -3,21 +3,34 @@
 **Subject**: Rewards Eligibility Oracle (REO / GIP-0088) on Arbitrum Sepolia
 **Reference**: `graphprotocol/contracts` PR #1345 (`deployment/testnet/2026-06-09/gip-0088`)
 **Tester**: lodestar-team · tooling: [`reo-doctor`](https://github.com/lodestar-team/reo-doctor)
-**Method**: live read-only verification on Sepolia + full behavioural test on a local
-`anvil` fork (no testnet GRT required).
+**Method**: live read-only verification + live baseline transactions on Arbitrum Sepolia
+(funded by Ørjan with 100k GRT), plus behavioural tests on a local `anvil` fork for the
+parts that need coordinator powers or time-travel.
 
 ---
 
 ## Summary
 
-REO's optimistic-denial model was verified **end to end**: an eligible indexer collects
-indexing rewards; an ineligible indexer's collect **reverts** (rewards preserved, not lost);
-re-enabling eligibility restores collection. All claimed behaviour in `IndexerTestGuide.md`
-reproduced, including the exact revert string. Six documentation issues found (below).
+REO's optimistic-denial model was reproduced: an eligible indexer collects indexing
+rewards; an ineligible indexer's collect **reverts** (rewards preserved, not lost);
+re-enabling eligibility restores collection. The exact revert string and POI-condition
+hashes were confirmed on-chain.
 
-Because 100k testnet GRT proved unobtainable (mint is gated, no faucet), testing was done
-on a local fork of Sepolia carrying the real contracts — a method we recommend Edge & Node
-add to the test materials, as it removes the funding barrier for every prospective tester.
+**Honest scope** — what was tested *where*:
+- **Live Arbitrum Sepolia**: baseline (stake/provision/register/allocate), Set 2m and 4m.
+  Set 3m's live revert is **pending an epoch roll** (allocation maturity); the premature run
+  produced finding **F1**.
+- **Local fork** (the rest): production REO path (Sets 2–5 + fail-open), subgraph denial
+  (Cycles 2–5 + 6.4), and reward conditions (POI matrix, reclaim config, below-min-signal).
+  Done on a fork because they need coordinator roles (oracle/SAO/governor) and time-travel.
+
+This is **comprehensive coverage of the REO-specific behaviour**, not 100% of every step in
+all five test plans — see [`TEST_EXECUTION_LOG.md`](TEST_EXECUTION_LOG.md) for the exact
+per-step matrix (including what was *not* run: full BaselineTestPlan, UI verification, some
+CLI-driven lifecycle/observability steps, and Cycle 7 zero-signal).
+
+The fork method is also offered to Edge & Node as a way to let testers reproduce these
+flows without testnet GRT or coordinator access.
 
 ---
 
@@ -41,15 +54,20 @@ on mainnet; live testing is Sepolia-only.
 
 ---
 
-## Blocker and resolution
+## Funding and the two test substrates
 
-- **Blocker**: provisioning on `SubgraphService` requires the minimum stake (docs: 100k GRT).
-  Sepolia GRT mint is gated (`Only minter can call`, governor `0x72ee…07B3`); there is no
-  faucet, so a tester cannot self-fund.
-- **Resolution**: fork Sepolia with `anvil --fork-url`. The fork carries the real REO /
-  RewardsManager / SubgraphService / GRT. Impersonating the GRT governor to `addMinter` +
-  `mint` yields unlimited test GRT; `evm_increaseTime` collapses the 14-day eligibility
-  window to milliseconds. Scripted as `playground/fund-fork.sh` + `playground/scenario-reo.sh`.
+- **Initial blocker**: provisioning needs the minimum stake (docs: 100k GRT). Sepolia GRT
+  mint is gated (`Only minter can call`); there is no working faucet. We first worked around
+  this with a fork (below).
+- **Then funded**: Ørjan sent **100k GRT + ETH** to our indexer
+  `0xfa82…a249`, which unblocked **live** baseline + collect testing on real Sepolia.
+- **Why a fork is still used for parts**: the production-REO, denial, and reward-condition
+  tests need **coordinator powers** (oracle/SAO/governor roles) and **time-travel** past the
+  14-day eligibility period and 8-hour staleness window — neither of which a tester has on
+  live testnet. A fork of Sepolia carries the real contracts and lets us impersonate those
+  roles and advance time. Scripted in `playground/`.
+- The fork also remains a faucet-free, coordinator-free way for *other* testers to reproduce
+  these flows — offered to Edge & Node as an addition to the test materials.
 
 ---
 
