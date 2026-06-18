@@ -71,21 +71,22 @@ say "ReoTestPlan — multi-indexer batch renewal + retention/removal (production
 cast send "$RM" "setProviderEligibilityOracle(address)" "$REO" --from "$GOV" --unlocked --rpc-url "$L" >/dev/null 2>&1
 cast send "$REO" "grantRole(bytes32,address)" "$ORACLE_ROLE" "$ME" --from "$OP" --unlocked --rpc-url "$L" >/dev/null 2>&1
 cast send "$REO" "setEligibilityValidation(bool)" true --from "$OP" --unlocked --rpc-url "$L" >/dev/null 2>&1
+# Short eligibility (30s) + retention (60s) so removal is reachable in one 61s hop — well under
+# the 7d oracle-update timeout, so no fail-open masks expiry.
+cast send "$REO" "setEligibilityPeriod(uint256)" 30 --from "$OP" --unlocked --rpc-url "$L" >/dev/null 2>&1
+cast send "$REO" "setIndexerRetentionPeriod(uint256)" 60 --from "$OP" --unlocked --rpc-url "$L" >/dev/null 2>&1
 IDX2=0x00000000000000000000000000000000000A11CE
 cast send "$REO" "renewIndexerEligibility(address[],bytes)" "[$ME,$IDX2]" 0x --from "$ME" --unlocked --rpc-url "$L" >/dev/null 2>&1 || fail "batch renew failed"
 T1=$(cast call "$REO" "getEligibilityRenewalTime(address)(uint256)" "$ME" --rpc-url "$L"|awk '{print $1}')
 T2=$(cast call "$REO" "getEligibilityRenewalTime(address)(uint256)" "$IDX2" --rpc-url "$L"|awk '{print $1}')
-{ [[ "$T1" != "0" && "$T2" != "0" ]]; } && pass "batch renewIndexerEligibility([me, other]) → both have renewal times" || fail "batch renew did not set both ($T1,$T2)"
+{ [[ "$T1" != "0" && "$T2" != "0" ]]; } && pass "batch renewIndexerEligibility([me, other]) → both tracked with renewal times" || fail "batch renew did not set both ($T1,$T2)"
 CNT0=$(cast call "$REO" "getIndexerCount()(uint256)" --rpc-url "$L"|awk '{print $1}')
-RET=$(cast call "$REO" "getIndexerRetentionPeriod()(uint256)" --rpc-url "$L"|awk '{print $1}')
-cast rpc evm_increaseTime $((RET + 1000)) --rpc-url "$L">/dev/null; cast rpc evm_mine --rpc-url "$L">/dev/null
-if cast send "$REO" "removeExpiredIndexers(address[])" "[$IDX2]" --from "$ME" --unlocked --rpc-url "$L" >/dev/null 2>&1; then
-  CNT1=$(cast call "$REO" "getIndexerCount()(uint256)" --rpc-url "$L"|awk '{print $1}')
-  awk "BEGIN{exit !($CNT1 < $CNT0)}" && pass "removeExpiredIndexers → tracked count $CNT0 → $CNT1" || echo "  ~ removeExpiredIndexers succeeded but count unchanged ($CNT0)"
-else
-  echo "  ~ removeExpiredIndexers REVERTED — after ${RET}s oracle silence the oracle is in fail-open,"
-  echo "    so the indexer still reads eligible and is not removed. Retention removal NOT verified here"
-  echo "    (would need the oracle kept fresh while a single indexer ages past retention)."
-fi
+cast rpc evm_increaseTime 61 --rpc-url "$L">/dev/null; cast rpc evm_mine --rpc-url "$L">/dev/null   # past retention(60), past eligibility(30)
+[[ "$(cast call "$REO" 'isEligible(address)(bool)' "$IDX2" --rpc-url "$L")" == "false" ]] && pass "IDX2 expired (isEligible=false, oracle still fresh — not fail-open)" || fail "IDX2 still eligible"
+# removeExpiredIndexer is SINGULAR and returns bool (never reverts)
+RES=$(cast call "$REO" "removeExpiredIndexer(address)(bool)" "$IDX2" --rpc-url "$L"|head -1)
+cast send "$REO" "removeExpiredIndexer(address)" "$IDX2" --from "$ME" --unlocked --rpc-url "$L" >/dev/null 2>&1
+CNT1=$(cast call "$REO" "getIndexerCount()(uint256)" --rpc-url "$L"|awk '{print $1}')
+{ [[ "$RES" == "true" ]] && (( CNT1 < CNT0 )); } && pass "removeExpiredIndexer(IDX2) → true, tracked count $CNT0 → $CNT1" || fail "removal failed (ret=$RES, $CNT0→$CNT1)"
 
 echo; echo "${G}${B}Gap scenarios verified${X} — CLOSE_ALLOCATION + balance, denial-4.4 precedence, batch renewal, retention/removal."
