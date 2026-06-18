@@ -1,181 +1,205 @@
 #!/usr/bin/env bash
-# reo-doctor — read-only REO (Rewards Eligibility Oracle) status checker for
-# Graph Network indexers. Reports the active oracle wiring, your eligibility,
-# expiry countdown, and tells you which test set (or operational action) applies.
+# reo-doctor — read-only REO (Rewards Eligibility Oracle) monitor for Graph Network
+# indexers. Reports oracle wiring, your eligibility + expiry, and a per-allocation
+# STALE_POI countdown — the two ways REO can silently cost an indexer rewards.
 #
 # GIP-0088 / REO. Read-only: only `cast call` (view) + a subgraph query. No keys.
 #
 # Usage:
-#   ./reo-doctor.sh <indexer-address> [testnet|mainnet]
+#   ./reo-doctor.sh <indexer-address> [testnet|mainnet] [--json|--prometheus] [--watch[=N]]
 #
-# Env:
-#   RPC_URL        Optional. Override the default RPC for the chosen network.
-#   GRAPH_API_KEY  Optional. If set, also lists your active allocations.
+# Output modes:
+#   (default)      human-readable
+#   --json         one JSON object (machine-readable; for scripting/dashboards)
+#   --prometheus   Prometheus exposition format (node_exporter textfile / pushgateway)
+#   --watch[=N]    re-run every N seconds (default 60); Ctrl-C to stop
 #
-# Requires: cast (foundry), jq. curl only if GRAPH_API_KEY is set.
+# Exit code: 0 = healthy, 1 = action needed (allocation stale/near-stale, or ineligible
+#            while revertOnIneligible is on), 2 = REO not active on this network.
+#
+# Env: RPC_URL (override RPC), GRAPH_API_KEY (enables allocation countdowns).
+# Requires: cast (foundry), jq; curl when GRAPH_API_KEY is set.
 
 set -euo pipefail
 
 # ---- args ---------------------------------------------------------------
-INDEXER_RAW=${1:-}
-NETWORK=${2:-testnet}
-if [[ -z "$INDEXER_RAW" ]]; then
-  echo "Usage: $0 <indexer-address> [testnet|mainnet]" >&2
-  exit 1
-fi
+FORMAT=human; WATCH=0; WATCH_INTERVAL=60; POSARGS=()
+for a in "$@"; do
+  case "$a" in
+    --json) FORMAT=json;;
+    --prometheus|--prom) FORMAT=prometheus;;
+    --watch) WATCH=1;;
+    --watch=*) WATCH=1; WATCH_INTERVAL=${a#--watch=};;
+    -h|--help) sed -n '2,20p' "$0" | sed 's/^# \{0,1\}//'; exit 0;;
+    --*) echo "unknown flag: $a" >&2; exit 1;;
+    *) POSARGS+=("$a");;
+  esac
+done
+INDEXER_RAW=${POSARGS[0]:-}; NETWORK=${POSARGS[1]:-testnet}
+[[ -z "$INDEXER_RAW" ]] && { echo "Usage: $0 <indexer-address> [testnet|mainnet] [--json|--prometheus] [--watch[=N]]" >&2; exit 1; }
 INDEXER=$(echo "$INDEXER_RAW" | tr '[:upper:]' '[:lower:]')
-
 command -v cast >/dev/null || { echo "error: 'cast' (foundry) not found" >&2; exit 1; }
 command -v jq   >/dev/null || { echo "error: 'jq' not found" >&2; exit 1; }
 
 # ---- per-network wiring (verified against PR #1345 Testnet/MainnetDetails) ----
 if [[ "$NETWORK" == "mainnet" ]]; then
   RPC=${RPC_URL:-https://arb1.arbitrum.io/rpc}
-  REO=0x8ec2767a9d9ba02b4e09e8ff4fac2e14a340f304       # RewardsEligibilityOracleA
-  MOCK=                                                  # no mock on mainnet
+  REO=0x8ec2767a9d9ba02b4e09e8ff4fac2e14a340f304; MOCK=
   REWARDS_MANAGER=0x971b9d3d0ae3eca029cab5ea1fb0f72c85e6a525
   SUBGRAPH_SERVICE=0xb2bb92d0de618878e438b55d5846cfecd9301105
   NET_SUBGRAPH=DZz4kDTdmzWLWsV373w2bSmoar3umKKH9y82SUKr5qmp
 else
   NETWORK=testnet
   RPC=${RPC_URL:-https://sepolia-rollup.arbitrum.io/rpc}
-  REO=0x6ba849fbd33257162552578b2a432d30784f2f80       # RewardsEligibilityOracleA
-  MOCK=0x69b0f3c6a19beaf1ba59405f7179e188c64b4e06       # RewardsEligibilityOracleMock
+  REO=0x6ba849fbd33257162552578b2a432d30784f2f80; MOCK=0x69b0f3c6a19beaf1ba59405f7179e188c64b4e06
   REWARDS_MANAGER=0x1f49cae7669086c8ba53cc35d1e9f80176d67e79
   SUBGRAPH_SERVICE=0xc24a3dac5d06d771f657a48b20ce1a671b78f26b
   NET_SUBGRAPH=3xQHhMudr1oh69ut36G2mbzpYmYxwqCeU6wwqyCDCnqV
 fi
 
-# ---- pretty ------------------------------------------------------------
-if [[ -t 1 ]]; then B=$'\e[1m'; G=$'\e[32m'; Y=$'\e[33m'; R=$'\e[31m'; D=$'\e[2m'; X=$'\e[0m'
-else B=; G=; Y=; R=; D=; X=; fi
-ok(){   echo "  ${G}✓${X} $*"; }
-warn(){ echo "  ${Y}!${X} $*"; }
-bad(){  echo "  ${R}✗${X} $*"; }
-hdr(){  echo; echo "${B}$*${X}"; }
 lc(){ echo "$1" | tr '[:upper:]' '[:lower:]'; }
 call(){ cast call "$1" "$2" "${@:3}" --rpc-url "$RPC" 2>/dev/null || true; }
 
-echo "${B}reo-doctor${X} ${D}· $NETWORK · indexer $INDEXER${X}"
+# ===================== GATHER (compute state into globals) =====================
+# Sets: MODE active_oracle REVERT VALIDATION PERIOD ELIGIBLE EXPIRY_LEFT(secs|"") STALE
+#       NOW ALLOCS[] (each "id secs status") RC
+gather(){
+  ACTIVE=$(lc "$(call "$REWARDS_MANAGER" 'getProviderEligibilityOracle()(address)')")
+  REVERT=$(call "$REWARDS_MANAGER" 'getRevertOnIneligible()(bool)')
+  ALLOCS=(); RC=0; EXPIRY_LEFT=""; ELIGIBLE=""; VALIDATION=""; PERIOD=""; STALE=""
+  if [[ -z "$ACTIVE" ]]; then MODE=dormant; RC=2; return; fi
+  if [[ -n "$MOCK" && "$ACTIVE" == "$(lc "$MOCK")" ]]; then MODE=mock
+  elif [[ "$ACTIVE" == "$(lc "$REO")" ]]; then MODE=production
+  else MODE=unknown; fi
 
-# ---- 1. oracle wiring --------------------------------------------------
-hdr "Oracle wiring (RewardsManager $REWARDS_MANAGER)"
-ACTIVE=$(lc "$(call "$REWARDS_MANAGER" 'getProviderEligibilityOracle()(address)')")
-if [[ -z "$ACTIVE" ]]; then
-  warn "RewardsManager has no eligibility oracle wired — REO is not active on $NETWORK yet."
-  echo "  ${D}(The REO contracts may be deployed but not yet connected to RewardsManager.)${X}"
-  echo; echo "${B}Verdict${X}"
-  echo "  Nothing to test here yet. REO is currently live on Arbitrum Sepolia (testnet)."
-  exit 0
-fi
-REVERT=$(call "$REWARDS_MANAGER" 'getRevertOnIneligible()(bool)')
-
-MODE=unknown
-if [[ -n "$MOCK" && "$ACTIVE" == "$(lc "$MOCK")" ]]; then MODE=mock
-elif [[ "$ACTIVE" == "$(lc "$REO")" ]]; then MODE=production
-fi
-
-case "$MODE" in
-  mock)       ok   "active oracle: MOCK ($ACTIVE) — you control your own eligibility";;
-  production) ok   "active oracle: production REO ($ACTIVE)";;
-  *)          warn "active oracle: $ACTIVE — matches neither known REO nor mock";;
-esac
-[[ "$REVERT" == "true" ]] && ok "revertOnIneligible = true (ineligible close reverts, rewards preserved)" \
-                          || warn "revertOnIneligible = $REVERT (ineligible close does NOT revert — reclaim path)"
-
-# ---- 2. REO parameters -------------------------------------------------
-hdr "REO parameters ($REO)"
-VALIDATION=$(call "$REO" 'getEligibilityValidation()(bool)')
-PERIOD=$(call "$REO" 'getEligibilityPeriod()(uint256)' | awk '{print $1}')
-[[ "$VALIDATION" == "true" ]] && ok "eligibilityValidation = true (enforced)" \
-                              || warn "eligibilityValidation = false (everyone eligible — emergency/default state)"
-printf "  ${D}·${X} eligibilityPeriod = %s s (~%s days)\n" "$PERIOD" "$(awk -v p="$PERIOD" 'BEGIN{printf "%.1f", p/86400}')"
-
-# ---- 3. your eligibility ----------------------------------------------
-hdr "Your eligibility"
-ORACLE_TO_CHECK=$REO
-[[ "$MODE" == "mock" ]] && ORACLE_TO_CHECK=$MOCK
-ELIGIBLE=$(call "$ORACLE_TO_CHECK" 'isEligible(address)(bool)' "$INDEXER")
-[[ "$ELIGIBLE" == "true" ]] && ok "isEligible = true" || bad "isEligible = false"
-
-if [[ "$MODE" == "production" && "$VALIDATION" == "true" ]]; then
-  RENEW=$(call "$REO" 'getEligibilityRenewalTime(address)(uint256)' "$INDEXER" | awk '{print $1}')
-  NOW=$(call "$REWARDS_MANAGER" 'paused()(bool)' >/dev/null 2>&1; cast block latest --field timestamp --rpc-url "$RPC")
-  if [[ "$RENEW" == "0" ]]; then
-    warn "never renewed (renewalTime = 0)"
-  else
-    EXPIRY=$((RENEW + PERIOD)); LEFT=$((EXPIRY - NOW))
-    if (( LEFT > 0 )); then ok "renewed; expires in ~$(awk -v l=$LEFT 'BEGIN{printf "%.1f", l/3600}') h"
-    else bad "eligibility EXPIRED $(awk -v l=$((-LEFT)) 'BEGIN{printf "%.1f", l/3600}') h ago — renew to collect rewards"; fi
+  VALIDATION=$(call "$REO" 'getEligibilityValidation()(bool)')
+  PERIOD=$(call "$REO" 'getEligibilityPeriod()(uint256)' | awk '{print $1}')
+  local oracle=$REO; [[ "$MODE" == "mock" ]] && oracle=$MOCK
+  ELIGIBLE=$(call "$oracle" 'isEligible(address)(bool)' "$INDEXER")
+  NOW=$(cast block latest --field timestamp --rpc-url "$RPC" 2>/dev/null || echo 0)
+  if [[ "$MODE" == "production" && "$VALIDATION" == "true" ]]; then
+    local renew; renew=$(call "$REO" 'getEligibilityRenewalTime(address)(uint256)' "$INDEXER" | awk '{print $1}')
+    [[ -n "$renew" && "$renew" != "0" ]] && EXPIRY_LEFT=$(( renew + PERIOD - NOW ))
   fi
-fi
+  STALE=$(call "$SUBGRAPH_SERVICE" 'maxPOIStaleness()(uint256)' | awk '{print $1}')
+  [[ "$ELIGIBLE" != "true" && "$REVERT" == "true" && "$MODE" != "mock" ]] && RC=1
 
-# ---- 4. POI staleness rule --------------------------------------------
-hdr "POI staleness guard (SubgraphService $SUBGRAPH_SERVICE)"
-STALE=$(call "$SUBGRAPH_SERVICE" 'maxPOIStaleness()(uint256)' | awk '{print $1}' || true)
-if [[ -n "${STALE:-}" ]]; then
-  printf "  ${D}·${X} maxPOIStaleness = %s s (~%s days) — present a POI more often than this,\n" \
-    "$STALE" "$(awk -v s="$STALE" 'BEGIN{printf "%.1f", s/86400}')"
-  echo "    or accrued rewards are reclaimed as STALE_POI (you can't present a POI while ineligible)."
-fi
-
-# ---- 5. allocations + per-allocation STALE_POI countdown (optional) ----
-# Returns 1 if any allocation is stale or within 1h of staleness (for the exit code).
-ALLOC_ALERT=0
-if [[ -n "${GRAPH_API_KEY:-}" ]]; then
-  hdr "Active allocations — POI staleness countdown"
-  URL="https://gateway.thegraph.com/api/$GRAPH_API_KEY/subgraphs/id/$NET_SUBGRAPH"
-  Q=$(jq -Rs . <<GQL
-{ allocations(where:{indexer_:{id:"$INDEXER"},status:"Active"}){ id subgraphDeployment{ipfsHash} } }
+  # per-allocation staleness (needs GRAPH_API_KEY + maxPOIStaleness)
+  [[ -z "${GRAPH_API_KEY:-}" || -z "$STALE" ]] && return
+  local url="https://gateway.thegraph.com/api/$GRAPH_API_KEY/subgraphs/id/$NET_SUBGRAPH"
+  local q resp ids id created lastpoi base left
+  q=$(jq -Rs . <<GQL
+{ allocations(where:{indexer_:{id:"$INDEXER"},status:"Active"}){ id } }
 GQL
 )
-  RESP=$(curl -s "$URL" -H 'content-type: application/json' -d "{\"query\":$Q}")
-  IDS=$(echo "$RESP" | jq -r '.data.allocations[]?.id' 2>/dev/null)
-  if [[ -z "$IDS" ]]; then
-    warn "no active allocations (or GRAPH_API_KEY/subgraph query failed)"
-  elif [[ -z "${STALE:-}" ]]; then
-    echo "$IDS" | while read -r id; do echo "  $id"; done
-    warn "maxPOIStaleness unavailable — cannot compute countdown"
-  else
-    NOW=$(cast block latest --field timestamp --rpc-url "$RPC")
-    # struct: (indexer, deployment, tokens, createdAt[f4], closedAt, lastPOIPresentedAt[f6], ...)
-    af(){ call "$SUBGRAPH_SERVICE" 'getAllocation(address)((address,bytes32,uint256,uint256,uint256,uint256,uint256,uint256,bool))' "$1" | tr -d '()' | cut -d, -f"$2" | awk '{print $1}'; }
-    echo "$IDS" | while read -r id; do
-      created=$(af "$id" 4); lastpoi=$(af "$id" 6)
-      base=$lastpoi; [[ "${lastpoi:-0}" == "0" || "$created" -gt "${lastpoi:-0}" ]] && base=$created
-      left=$(( base + STALE - NOW ))
-      hrs=$(awk -v l=$left 'BEGIN{printf "%.1f", l/3600}')
-      if   (( left <= 0 ));     then bad  "$id  ${R}STALE NOW${X} — rewards reclaimable as STALE_POI; present a POI";  echo stale >> /tmp/reo_alert.$$
-      elif (( left < 3600 ));   then bad  "$id  stale in ${hrs}h — present a POI now";                                 echo stale >> /tmp/reo_alert.$$
-      elif (( left < STALE/4 )); then warn "$id  stale in ${hrs}h";
-      else ok "$id  healthy (stale in ${hrs}h)"; fi
-    done
-    [[ -f /tmp/reo_alert.$$ ]] && { ALLOC_ALERT=1; rm -f /tmp/reo_alert.$$; }
+  resp=$(curl -s "$url" -H 'content-type: application/json' -d "{\"query\":$q}" 2>/dev/null || true)
+  ids=$(echo "$resp" | jq -r '.data.allocations[]?.id' 2>/dev/null || true)
+  [[ -z "$ids" ]] && return
+  while read -r id; do
+    [[ -z "$id" ]] && continue
+    local s; s=$(call "$SUBGRAPH_SERVICE" 'getAllocation(address)((address,bytes32,uint256,uint256,uint256,uint256,uint256,uint256,bool))' "$id" | tr -d '()')
+    created=$(echo "$s" | cut -d, -f4 | awk '{print $1}'); lastpoi=$(echo "$s" | cut -d, -f6 | awk '{print $1}')
+    base=${lastpoi:-0}; [[ "$base" == "0" || "${created:-0}" -gt "$base" ]] && base=${created:-0}
+    left=$(( base + STALE - NOW ))
+    local st=healthy
+    if   (( left <= 0 ));      then st=stale; RC=1
+    elif (( left < 3600 ));    then st=critical; RC=1
+    elif (( left < STALE/4 )); then st=warn; fi
+    ALLOCS+=("$id $left $st")
+  done <<< "$ids"
+}
+
+# ===================== RENDERERS =====================
+render_human(){
+  if [[ -t 1 ]]; then local B=$'\e[1m' G=$'\e[32m' Y=$'\e[33m' R=$'\e[31m' D=$'\e[2m' X=$'\e[0m'
+  else local B= G= Y= R= D= X=; fi
+  echo "${B}reo-doctor${X} ${D}· $NETWORK · indexer $INDEXER${X}"
+  if [[ "$MODE" == "dormant" ]]; then
+    echo; echo "  ${Y}!${X} RewardsManager has no eligibility oracle wired — REO not active on $NETWORK yet."
+    echo "  ${D}REO is currently live on Arbitrum Sepolia (testnet).${X}"; return
   fi
-fi
+  echo; echo "${B}Oracle wiring${X}"
+  case "$MODE" in
+    mock) echo "  ${G}✓${X} active oracle: MOCK ($ACTIVE) — you control your own eligibility";;
+    production) echo "  ${G}✓${X} active oracle: production REO ($ACTIVE)";;
+    *) echo "  ${Y}!${X} active oracle: $ACTIVE — unrecognised";;
+  esac
+  [[ "$REVERT" == "true" ]] && echo "  ${G}✓${X} revertOnIneligible = true" || echo "  ${Y}!${X} revertOnIneligible = $REVERT"
+  echo; echo "${B}Eligibility${X}"
+  [[ "$ELIGIBLE" == "true" ]] && echo "  ${G}✓${X} isEligible = true" || echo "  ${R}✗${X} isEligible = false"
+  if [[ -n "$EXPIRY_LEFT" ]]; then
+    if (( EXPIRY_LEFT > 0 )); then echo "  ${D}·${X} expires in ~$(awk -v l=$EXPIRY_LEFT 'BEGIN{printf "%.1f",l/3600}') h"
+    else echo "  ${R}✗${X} eligibility EXPIRED — renew to collect rewards"; fi
+  fi
+  if (( ${#ALLOCS[@]} )); then
+    echo; echo "${B}Active allocations — POI staleness countdown${X}"
+    local a id secs st hrs
+    for a in "${ALLOCS[@]}"; do
+      id=${a%% *}; secs=$(echo "$a"|awk '{print $2}'); st=${a##* }; hrs=$(awk -v s=$secs 'BEGIN{printf "%.1f",s/3600}')
+      case "$st" in
+        stale)    echo "  ${R}✗${X} $id  STALE NOW — reclaimable as STALE_POI; present a POI";;
+        critical) echo "  ${R}✗${X} $id  stale in ${hrs}h — present a POI now";;
+        warn)     echo "  ${Y}!${X} $id  stale in ${hrs}h";;
+        *)        echo "  ${G}✓${X} $id  healthy (stale in ${hrs}h)";;
+      esac
+    done
+  elif [[ -n "${GRAPH_API_KEY:-}" ]]; then echo; echo "  ${D}no active allocations${X}"; fi
+  (( RC == 1 )) && { echo; echo "  ${R}⚠ action needed${X} (exit 1)"; }
+}
 
-# ---- verdict -----------------------------------------------------------
-hdr "Verdict"
-case "$MODE" in
-  mock)
-    echo "  Mock oracle is live → run IndexerTestGuide ${B}Sets 2m–4m${X}."
-    echo "  Toggle your eligibility:  cast send $MOCK \"setEligible(bool)\" <true|false> --rpc-url $RPC --private-key \$KEY";;
-  production)
-    if [[ "$VALIDATION" == "true" ]]; then
-      echo "  Production REO live, validation ON → run ${B}Sets 2–4${X} (renew → close → expire → recover)."
-    else
-      echo "  Production REO live, validation OFF → ${B}Set 5${X} (everyone eligible)."
-    fi;;
-  *) echo "  Unrecognised oracle — confirm the deployment before testing.";;
-esac
-if [[ "$ELIGIBLE" != "true" && "$REVERT" == "true" ]]; then
-  echo "  ${Y}Note:${X} you are ineligible — closing an allocation will revert until you become eligible."
-fi
+render_json(){
+  local allocs="[]" a id secs st
+  if (( ${#ALLOCS[@]} )); then
+    allocs=$(for a in "${ALLOCS[@]}"; do id=${a%% *}; secs=$(echo "$a"|awk '{print $2}'); st=${a##* }
+      jq -nc --arg id "$id" --argjson s "$secs" --arg st "$st" '{allocation:$id,secondsToStale:$s,status:$st}'; done | jq -sc .)
+  fi
+  # precompute nullable numbers as valid JSON (number or null)
+  local stale_j="null" expiry_j="null"
+  [[ -n "${STALE:-}" ]] && stale_j="$STALE"
+  [[ -n "${EXPIRY_LEFT:-}" ]] && expiry_j="$EXPIRY_LEFT"
+  jq -nc \
+    --arg net "$NETWORK" --arg idx "$INDEXER" --arg mode "$MODE" --arg oracle "${ACTIVE:-}" \
+    --argjson revert "$([[ "$REVERT" == true ]] && echo true || echo false)" \
+    --argjson elig "$([[ "$ELIGIBLE" == true ]] && echo true || echo false)" \
+    --argjson validation "$([[ "$VALIDATION" == true ]] && echo true || echo false)" \
+    --argjson stale "$stale_j" --argjson expiry "$expiry_j" \
+    --argjson allocs "$allocs" --argjson rc "$RC" '
+    {network:$net, indexer:$idx, oracleMode:$mode, oracle:$oracle, revertOnIneligible:$revert,
+     isEligible:$elig, eligibilityValidation:$validation, maxPOIStaleness:$stale,
+     secondsToExpiry:$expiry, allocations:$allocs, actionNeeded:($rc==1), exitCode:$rc}'
+}
 
-# ---- exit code (cron / monitoring friendly) ---------------------------
-#   0 = healthy   1 = action needed (ineligible while enforced, or an allocation stale/near-stale)
-RC=0
-[[ "$ELIGIBLE" != "true" && "$REVERT" == "true" && "$MODE" != "mock" ]] && RC=1
-(( ALLOC_ALERT )) && RC=1
-[[ "$RC" == "1" ]] && echo "  ${R}⚠ action needed${X} (exit 1)"
-exit $RC
+render_prometheus(){
+  local ts; ts=""  # node_exporter textfile collector adds its own timestamp
+  echo "# HELP reo_up reo-doctor scrape succeeded (1) / REO dormant (0)"
+  echo "# TYPE reo_up gauge"
+  echo "reo_up{network=\"$NETWORK\",indexer=\"$INDEXER\"} $([[ "$MODE" == dormant ]] && echo 0 || echo 1)"
+  [[ "$MODE" == dormant ]] && return
+  echo "# TYPE reo_eligible gauge"
+  echo "reo_eligible{network=\"$NETWORK\",indexer=\"$INDEXER\"} $([[ "$ELIGIBLE" == true ]] && echo 1 || echo 0)"
+  echo "# TYPE reo_revert_on_ineligible gauge"
+  echo "reo_revert_on_ineligible{network=\"$NETWORK\"} $([[ "$REVERT" == true ]] && echo 1 || echo 0)"
+  echo "# TYPE reo_action_needed gauge"
+  echo "reo_action_needed{network=\"$NETWORK\",indexer=\"$INDEXER\"} $([[ "$RC" == 1 ]] && echo 1 || echo 0)"
+  [[ -n "$EXPIRY_LEFT" ]] && { echo "# TYPE reo_eligibility_seconds_to_expiry gauge"; echo "reo_eligibility_seconds_to_expiry{network=\"$NETWORK\",indexer=\"$INDEXER\"} $EXPIRY_LEFT"; }
+  if (( ${#ALLOCS[@]} )); then
+    echo "# HELP reo_seconds_to_poi_stale seconds until allocation reclaimed as STALE_POI"
+    echo "# TYPE reo_seconds_to_poi_stale gauge"
+    local a id secs; for a in "${ALLOCS[@]}"; do id=${a%% *}; secs=$(echo "$a"|awk '{print $2}')
+      echo "reo_seconds_to_poi_stale{network=\"$NETWORK\",indexer=\"$INDEXER\",allocation=\"$id\"} $secs"; done
+  fi
+}
+
+run_once(){ gather; case "$FORMAT" in json) render_json;; prometheus) render_prometheus;; *) render_human;; esac; return "$RC"; }
+
+# ===================== MAIN =====================
+if (( WATCH )); then
+  trap 'exit 0' INT
+  while true; do
+    [[ "$FORMAT" == human ]] && { clear 2>/dev/null || true; echo "# $(date '+%H:%M:%S') · every ${WATCH_INTERVAL}s · Ctrl-C to stop"; }
+    run_once || true
+    sleep "$WATCH_INTERVAL"
+  done
+else
+  run_once
+fi
