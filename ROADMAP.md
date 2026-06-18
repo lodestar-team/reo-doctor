@@ -10,15 +10,13 @@ Wiring → params → eligibility + expiry → POI-staleness → allocations →
 Testnet + mainnet aware, degrades gracefully where REO is dormant.
 
 ## v0.x — operational essentials (bash, high value, low cost)
-- [ ] **Per-allocation STALE_POI countdown** — the one that loses real money. Per active
-      allocation: time until `lastPOIPresentedAt + maxPOIStaleness`. Amber/red thresholds.
-      (Needs last-POI time — investigate network-subgraph schema vs SubgraphService events.)
+- [x] **Per-allocation STALE_POI countdown** — the one that loses real money. Per active
+      allocation: time until `max(createdAt, lastPOIPresentedAt) + maxPOIStaleness`, amber/red
+      thresholds. Source: on-chain `getAllocation` field (subgraph doesn't expose it).
+- [x] **Exit-code contract** — 0 healthy, 1 action-needed. Drops into cron/monitoring.
 - [ ] **Eligibility expiry thresholds** — amber when < N hours left, red when expired.
 - [ ] **`--json`** — machine-readable output for scripting and dashboard ingestion.
-- [ ] **`--watch [interval]`** — poll, diff, print only on change; exit non-zero when action
-      is needed (cron / Nagios / systemd-timer friendly).
-- [ ] **Exit-code contract** — 0 healthy, 1 action-needed, 2 error. So it drops into any
-      existing monitoring without parsing.
+- [ ] **`--watch [interval]`** — poll, diff, print only on change.
 
 ## v1 — the daemon (Rust; horizon-doctor family / Jenny's wheelhouse)
 The point where bash stops being the right tool.

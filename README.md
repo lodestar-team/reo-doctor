@@ -22,12 +22,20 @@ Your eligibility
   ✓ isEligible = true
 
 POI staleness guard (SubgraphService 0xc24a…f26b)
-  · maxPOIStaleness = 28800 s (~8 h) — present a POI more often than this…
+  · maxPOIStaleness = 28800 s — present a POI more often than this…
+
+Active allocations — POI staleness countdown   (needs GRAPH_API_KEY)
+  ✓ 0x102d…d207  healthy (stale in 4.1h)
+  ! 0x9cf3…f33d  stale in 1.4h
+  ✗ 0xdfd9…c446  STALE NOW — rewards reclaimable as STALE_POI; present a POI
 
 Verdict
   Mock oracle is live → run IndexerTestGuide Sets 2m–4m.
-  Toggle your eligibility:  cast send 0x69b0…4e06 "setEligible(bool)" <true|false> …
+  ⚠ action needed (exit 1)
 ```
+
+Exit code is monitoring-friendly: **0** = healthy, **1** = action needed (an allocation is
+stale/near-stale, or you're ineligible while `revertOnIneligible` is on). Drop it in cron.
 
 ## Why
 
@@ -105,9 +113,10 @@ is the source of truth.
 
 ## Status
 
-`reo-doctor.sh` is early but working. The harness reproduces its scenarios cold. Roadmap for
-the tool: per-allocation `STALE_POI` countdown, JSON output, and a watch mode. Issues and PRs
-welcome.
+`reo-doctor.sh` is working: oracle wiring, eligibility + expiry, **per-allocation `STALE_POI`
+countdown**, and a monitoring exit code. The harness reproduces its scenarios cold. Still on the
+roadmap: JSON output, a `--watch` loop, and Discord/Telegram/Prometheus alert sinks. Issues and
+PRs welcome.
 
 ## Licence
 
