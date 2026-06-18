@@ -13,8 +13,10 @@ SS=0xc24a3dac5d06d771f657a48b20ce1a671b78f26b
 RM=0x1f49cae7669086c8ba53cc35d1e9f80176d67e79
 DM=0x96e1b86b2739e8A3d59F40F2532caDF9cE8Da088
 SAO=0x71D9aE967d1f31fbbD1817150902de78f8f2f73E
+MOCK=0x69b0f3c6a19beaf1ba59405f7179e188c64b4e06
 POI_SIG=0x02a2405405df0f245b8bfb907801498390c114e3f197aa4d0f2b954ecfb84acb
-DENIED_H=$(cast keccak "SUBGRAPH_DENIED"); NONE_H=$(cast keccak "NONE")
+DENIED_H=$(cast keccak "SUBGRAPH_DENIED")
+NONE_H=0x0000000000000000000000000000000000000000000000000000000000000000  # NONE = bytes32(0), not keccak
 TARGET_GRT=200000; ALLOC_TOKENS=50000000000000000000000
 POI=0x5555555555555555555555555555555555555555555555555555555555555555
 
@@ -41,6 +43,7 @@ SH=$(cast keccak "$(cast abi-encode "f(bytes32,address,address)" "$(cast keccak 
 PR=$(cast wallet sign --no-hash --private-key "$AKEY" "$(cast keccak "0x1901${DS:2}${SH:2}")")
 cast send "$SS" "startService(address,bytes)" "$ME" "$(cast abi-encode "f(bytes32,uint256,address,bytes)" "$DEP" "$ALLOC_TOKENS" "$ALLOC" "$PR")" --from "$ME" --unlocked --rpc-url "$L" >/dev/null 2>&1 || fail "startService failed"
 cast rpc anvil_mine 1200 --rpc-url "$L">/dev/null; cast rpc evm_increaseTime 7200 --rpc-url "$L">/dev/null; cast rpc evm_mine --rpc-url "$L">/dev/null
+cast send "$MOCK" "setEligible(bool)" true --from "$ME" --unlocked --rpc-url "$L" >/dev/null 2>&1   # ensure eligible (fork may inherit ineligible state)
 pass "allocation $ALLOC matured on $DEP"
 
 say "Cycle 2 — denial state management"
@@ -60,6 +63,13 @@ C=$(collect_cond "$ALLOC"); CN=$(condname "$C")
 [[ "$C" == "$DENIED_H" ]] && pass "4.1 POIPresented condition = SUBGRAPH_DENIED" || fail "4.1 condition was $CN ($C), expected SUBGRAPH_DENIED"
 RW2=$(rew "$ALLOC")
 [[ "$RW1" == "$RW2" ]] && pass "4.1 snapshot preserved (getRewards frozen at $(cast from-wei "$RW2") GRT — pre-denial rewards NOT lost)" || pass "4.1 getRewards $RW1 → $RW2 (deferred)"
+
+say "Cycle 6.4 — denial precedence over indexer ineligibility"
+cast send "$MOCK" "setEligible(bool)" false --from "$ME" --unlocked --rpc-url "$L" >/dev/null 2>&1   # make ME ineligible
+[[ "$(cast call "$MOCK" 'isEligible(address)(bool)' "$ME" --rpc-url "$L")" == "false" ]] && pass "indexer set ineligible (mock)" || fail "could not set ineligible"
+C=$(collect_cond "$ALLOC"); CN=$(condname "$C")
+[[ "$C" == "$DENIED_H" ]] && pass "6.4 ineligible + denied → condition SUBGRAPH_DENIED (denial precedes INDEXER_INELIGIBLE)" || fail "6.4 condition was $CN, expected SUBGRAPH_DENIED"
+cast send "$MOCK" "setEligible(bool)" true --from "$ME" --unlocked --rpc-url "$L" >/dev/null 2>&1   # restore eligibility for recovery claim
 
 say "Cycle 5 — undeny and recovery"
 cast send "$RM" "setDenied(bytes32,bool)" "$DEP" false --from "$SAO" --unlocked --rpc-url "$L" >/dev/null 2>&1 || fail "undeny failed"
