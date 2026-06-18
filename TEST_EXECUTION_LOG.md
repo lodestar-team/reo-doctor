@@ -84,8 +84,10 @@ Plans: `IndexerTestGuide.md` (mock Sets 2m–4m, production Sets 2–5) on PR #1
 | 2.3 below-min-signal freezes accumulator | ✅ | raised `minimumSubgraphSignal` → `getAccRewardsForSubgraph` frozen |
 | 5.3 close reclaim → `CLOSE_ALLOCATION` | ✅ | `stopService` → `RewardsReclaimed` reason `CLOSE_ALLOCATION`; reclaim address balance 0 → 252.8 GRT (balance reconciliation) |
 | 1.5 reclaim balance reconciliation | ✅ | confirmed via the CLOSE_ALLOCATION reclaim above |
+| 5.2 healthy resize (no reclaim) | ✅ | `resizeAllocation(indexer, alloc, newTokens)` 50k → 70k; contract fn, no CLI needed |
+| 5.1 stale resize → `STALE_POI` reclaim | ✅ | resize past `maxPOIStaleness` → `RewardsReclaimed` reason `STALE_POI`, pending cleared |
+| 3.2 `NO_ALLOCATED_TOKENS` | ✅ | `onSubgraphAllocationUpdate` on a signalled, zero-allocation deployment → `RewardsReclaimed` reason `NO_ALLOCATED_TOKENS` (~130 GRT to reclaim addr) |
 | Cycle 7 (zero global signal) | ⏭️ | skipped — impractical on shared chain (doc says unit-test only) |
-| 5.1–5.2 resize lifecycle (CLI `reallocate`) | ◐ | not run — needs indexer-agent CLI |
 
 ### SubgraphDenial — additional (`scenario-gaps.sh`)
 
@@ -123,11 +125,16 @@ Plans: `IndexerTestGuide.md` (mock Sets 2m–4m, production Sets 2–5) on PR #1
 - **Subgraph denial** (Cycles 2–5, 6.4, 4.4): complete (fork).
 - **Rewards conditions** (POI matrix, reclaim config + balance, below-min-signal,
   `CLOSE_ALLOCATION`): complete (fork); Cycle 7 skipped, CLI-driven resize not run.
-- **Multi-indexer batch renewal**: ✅. **Retention removal**: ✅.
-- **Still not run**: full BaselineTestPlan (query-serving/network-health/attestations — needs a
-  live indexer stack), UI/Explorer verification (scriptable with Playwright, not yet done),
-  `NO_ALLOCATED_TOKENS` end-to-end (needs a deployment with zero *total* allocations — hard on
-  a fork of shared state), observability event audit, allocation resize lifecycle.
+- **Multi-indexer batch renewal**: ✅. **Retention removal**: ✅. **Resize lifecycle**: ✅.
+  **`NO_ALLOCATED_TOKENS`**: ✅.
+- **Observability** (Cycle 6): conditions `NONE / ZERO_POI / STALE_POI / ALLOCATION_TOO_YOUNG /
+  SUBGRAPH_DENIED / CLOSE_ALLOCATION / NO_ALLOCATED_TOKENS` were each decoded from the real
+  `POIPresented` / `RewardsReclaimed` events across the scenarios above — so the event surface
+  is exercised, though not assembled into a single formal audit table.
+- **Genuinely not done** (only these remain):
+  - **UI / Explorer verification** — scriptable with Playwright against the real Explorer; not yet run.
+  - **Full BaselineTestPlan** query-serving / attestations — needs a live graph-node + indexer-service
+    stack; not REO-specific; mocking it would not be a valid test.
 - Reproducible end-to-end:
   `playground/{fund-fork,scenario-reo,scenario-reo-production,scenario-subgraph-denial,scenario-rewards-conditions,scenario-gaps}.sh`,
   `testnet/collect-test.sh`.
