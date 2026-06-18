@@ -56,18 +56,34 @@ it tells you which test set applies to the current deployment.
 ## Usage
 
 ```bash
-./reo-doctor.sh <indexer-address> [testnet|mainnet]
+./reo-doctor.sh <indexer-address> [testnet|mainnet] [--json|--prometheus] [--watch[=N]]
 ```
 
-- `testnet` → Arbitrum Sepolia (default)
-- `mainnet` → Arbitrum One
+- `testnet` → Arbitrum Sepolia (default) · `mainnet` → Arbitrum One
+- `--json` — one JSON object (scripting / dashboards)
+- `--prometheus` — Prometheus exposition format (gauges below)
+- `--watch[=N]` — re-run every N seconds (default 60); Ctrl-C to stop
 
 Optional environment:
 
 | Var | Effect |
 |-----|--------|
 | `RPC_URL` | Override the default RPC for the chosen network |
-| `GRAPH_API_KEY` | If set, also lists your active allocations from the network subgraph |
+| `GRAPH_API_KEY` | Enables the per-allocation staleness countdown (lists active allocations) |
+
+### Put it in your monitoring
+
+Prometheus via node_exporter's textfile collector (cron):
+
+```bash
+GRAPH_API_KEY=… reo-doctor.sh 0xYourIndexer mainnet --prometheus \
+  > /var/lib/node_exporter/textfile/reo.prom
+```
+
+Gauges: `reo_up`, `reo_eligible`, `reo_revert_on_ineligible`, `reo_action_needed`,
+`reo_eligibility_seconds_to_expiry`, and **`reo_seconds_to_poi_stale{allocation="0x…"}`** —
+alert when that drops below, say, an hour. Or just `reo-doctor … || alert` in cron (exit 1 =
+action needed).
 
 ## Requirements
 
@@ -114,9 +130,9 @@ is the source of truth.
 ## Status
 
 `reo-doctor.sh` is working: oracle wiring, eligibility + expiry, **per-allocation `STALE_POI`
-countdown**, and a monitoring exit code. The harness reproduces its scenarios cold. Still on the
-roadmap: JSON output, a `--watch` loop, and Discord/Telegram/Prometheus alert sinks. Issues and
-PRs welcome.
+countdown**, a monitoring exit code, and `--json` / `--prometheus` / `--watch` output modes. The
+harness reproduces its scenarios cold. Still on the roadmap: eligibility-expiry thresholds and a
+Discord/Telegram webhook sink. Issues and PRs welcome.
 
 ## Licence
 

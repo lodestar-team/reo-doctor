@@ -14,9 +14,10 @@ Testnet + mainnet aware, degrades gracefully where REO is dormant.
       allocation: time until `max(createdAt, lastPOIPresentedAt) + maxPOIStaleness`, amber/red
       thresholds. Source: on-chain `getAllocation` field (subgraph doesn't expose it).
 - [x] **Exit-code contract** — 0 healthy, 1 action-needed. Drops into cron/monitoring.
+- [x] **`--json`** — machine-readable output for scripting and dashboard ingestion.
+- [x] **`--prometheus`** — exposition format incl. `reo_seconds_to_poi_stale{allocation}`.
+- [x] **`--watch [interval]`** — re-run on an interval.
 - [ ] **Eligibility expiry thresholds** — amber when < N hours left, red when expired.
-- [ ] **`--json`** — machine-readable output for scripting and dashboard ingestion.
-- [ ] **`--watch [interval]`** — poll, diff, print only on change.
 
 ## v1 — the daemon (Rust; horizon-doctor family / Jenny's wheelhouse)
 The point where bash stops being the right tool.
