@@ -119,18 +119,39 @@ if [[ -n "${STALE:-}" ]]; then
   echo "    or accrued rewards are reclaimed as STALE_POI (you can't present a POI while ineligible)."
 fi
 
-# ---- 5. allocations (optional) ----------------------------------------
+# ---- 5. allocations + per-allocation STALE_POI countdown (optional) ----
+# Returns 1 if any allocation is stale or within 1h of staleness (for the exit code).
+ALLOC_ALERT=0
 if [[ -n "${GRAPH_API_KEY:-}" ]]; then
-  hdr "Active allocations"
+  hdr "Active allocations — POI staleness countdown"
   URL="https://gateway.thegraph.com/api/$GRAPH_API_KEY/subgraphs/id/$NET_SUBGRAPH"
   Q=$(jq -Rs . <<GQL
-{ allocations(where:{indexer_:{id:"$INDEXER"},status:"Active"}){ id allocatedTokens createdAtEpoch subgraphDeployment{ipfsHash} } graphNetworks{currentEpoch} }
+{ allocations(where:{indexer_:{id:"$INDEXER"},status:"Active"}){ id subgraphDeployment{ipfsHash} } }
 GQL
 )
   RESP=$(curl -s "$URL" -H 'content-type: application/json' -d "{\"query\":$Q}")
-  echo "$RESP" | jq -e '.data.allocations | length > 0' >/dev/null 2>&1 \
-    && echo "$RESP" | jq -r '.data as $d | "  current epoch: \($d.graphNetworks[0].currentEpoch)", (.data.allocations[] | "  \(.id)  \(.subgraphDeployment.ipfsHash)  opened@epoch \(.createdAtEpoch)")' \
-    || warn "no active allocations (or GRAPH_API_KEY/subgraph query failed)"
+  IDS=$(echo "$RESP" | jq -r '.data.allocations[]?.id' 2>/dev/null)
+  if [[ -z "$IDS" ]]; then
+    warn "no active allocations (or GRAPH_API_KEY/subgraph query failed)"
+  elif [[ -z "${STALE:-}" ]]; then
+    echo "$IDS" | while read -r id; do echo "  $id"; done
+    warn "maxPOIStaleness unavailable — cannot compute countdown"
+  else
+    NOW=$(cast block latest --field timestamp --rpc-url "$RPC")
+    # struct: (indexer, deployment, tokens, createdAt[f4], closedAt, lastPOIPresentedAt[f6], ...)
+    af(){ call "$SUBGRAPH_SERVICE" 'getAllocation(address)((address,bytes32,uint256,uint256,uint256,uint256,uint256,uint256,bool))' "$1" | tr -d '()' | cut -d, -f"$2" | awk '{print $1}'; }
+    echo "$IDS" | while read -r id; do
+      created=$(af "$id" 4); lastpoi=$(af "$id" 6)
+      base=$lastpoi; [[ "${lastpoi:-0}" == "0" || "$created" -gt "${lastpoi:-0}" ]] && base=$created
+      left=$(( base + STALE - NOW ))
+      hrs=$(awk -v l=$left 'BEGIN{printf "%.1f", l/3600}')
+      if   (( left <= 0 ));     then bad  "$id  ${R}STALE NOW${X} — rewards reclaimable as STALE_POI; present a POI";  echo stale >> /tmp/reo_alert.$$
+      elif (( left < 3600 ));   then bad  "$id  stale in ${hrs}h — present a POI now";                                 echo stale >> /tmp/reo_alert.$$
+      elif (( left < STALE/4 )); then warn "$id  stale in ${hrs}h";
+      else ok "$id  healthy (stale in ${hrs}h)"; fi
+    done
+    [[ -f /tmp/reo_alert.$$ ]] && { ALLOC_ALERT=1; rm -f /tmp/reo_alert.$$; }
+  fi
 fi
 
 # ---- verdict -----------------------------------------------------------
@@ -150,4 +171,11 @@ esac
 if [[ "$ELIGIBLE" != "true" && "$REVERT" == "true" ]]; then
   echo "  ${Y}Note:${X} you are ineligible — closing an allocation will revert until you become eligible."
 fi
-exit 0
+
+# ---- exit code (cron / monitoring friendly) ---------------------------
+#   0 = healthy   1 = action needed (ineligible while enforced, or an allocation stale/near-stale)
+RC=0
+[[ "$ELIGIBLE" != "true" && "$REVERT" == "true" && "$MODE" != "mock" ]] && RC=1
+(( ALLOC_ALERT )) && RC=1
+[[ "$RC" == "1" ]] && echo "  ${R}⚠ action needed${X} (exit 1)"
+exit $RC
