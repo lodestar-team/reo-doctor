@@ -3,6 +3,11 @@
 Step-by-step completion + observations for the REO test coordination (Edge & Node — @Rem).
 Plans: `IndexerTestGuide.md` (mock Sets 2m–4m, production Sets 2–5) on PR #1345.
 
+**Test plans tested at commit** `14823afc9f396ebaba6398994b25989d4c249d51`
+(branch `deployment/testnet/2026-06-09/gip-0088` = PR #1345 head; the latest commit to the REO
+testing docs as of 2026-06-17 09:32 UTC). All five plan docs verified by blob hash against that
+commit.
+
 - **Indexer**: `0xfa827db4a3fa4e5403701c728198e102897aa249` (Arbitrum Sepolia)
 - **Where**: `live` = real Arbitrum Sepolia · `fork` = local `anvil` fork of Sepolia (real
   contracts; used to self-serve coordinator actions + time-travel without ORACLE_ROLE/GRT)
