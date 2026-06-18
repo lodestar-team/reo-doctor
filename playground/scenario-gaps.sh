@@ -23,9 +23,12 @@ OP=0xade6b8eb69a49b56929c1d4f4b428d791861db6f
 SAO=0x71D9aE967d1f31fbbD1817150902de78f8f2f73E
 RSIG=0xddd1cb077b47c48e2662c294a459bb99e6d91e6ec1392c1eeeba5c4e5d10eaee  # RewardsReclaimed
 POI_SIG=0x02a2405405df0f245b8bfb907801498390c114e3f197aa4d0f2b954ecfb84acb
-CLOSE_H=$(cast keccak CLOSE_ALLOCATION); ZERO_H=$(cast keccak ZERO_POI); NOALLOC_H=$(cast keccak NO_ALLOCATED_TOKENS)
+CLOSE_H=$(cast keccak CLOSE_ALLOCATION); ZERO_H=$(cast keccak ZERO_POI); NOALLOC_H=$(cast keccak NO_ALLOCATED_TOKENS); STALE_H=$(cast keccak STALE_POI)
+NOALLOC_DEP=${NOALLOC_DEP:-0x067a79e883d238147132344e32405553dca72449a8cc9cffd267c270e0908d82}  # signalled, zero allocations
+alloc_tokens(){ cast call "$SS" "getAllocation(address)((address,bytes32,uint256,uint256,uint256,uint256,uint256,uint256,bool))" "$1" --rpc-url "$L" | tr -d '()' | cut -d, -f3 | awk '{print $1}'; }
+reclaim_of(){ echo "$1" | jq -r --arg s "$RSIG" '.logs[]|select(.topics[0]==$s)|.topics[1]' 2>/dev/null | head -1; }
 ORACLE_ROLE=$(cast keccak "ORACLE_ROLE")
-TARGET_GRT=200000; ALLOC_TOKENS=50000000000000000000000
+TARGET_GRT=300000; ALLOC_TOKENS=50000000000000000000000  # headroom: fork inherits ~90k live allocations + several opened here
 VPOI=0x9999999999999999999999999999999999999999999999999999999999999999
 RECLAIM=0x000000000000000000000000000000000000bEEF
 
@@ -67,6 +70,22 @@ C=$(poi_cond "$A2" 0x00000000000000000000000000000000000000000000000000000000000
 [[ "$C" == "$ZERO_H" ]] && pass "4.4 zero POI on denied → ZERO_POI (denial does NOT shield a zero POI)" || fail "4.4 condition was $C (expected ZERO_POI)"
 cast send "$RM" "setDenied(bytes32,bool)" "$DEP" false --from "$SAO" --unlocked --rpc-url "$L" >/dev/null 2>&1
 
+say "RewardsConditions 5.1/5.2 — allocation resize lifecycle"
+A3=$(mkalloc "$DEP") || fail "alloc3 failed"
+cast rpc anvil_mine 1200 --rpc-url "$L">/dev/null; cast rpc evm_increaseTime 600 --rpc-url "$L">/dev/null; cast rpc evm_mine --rpc-url "$L">/dev/null
+cast send "$SS" "resizeAllocation(address,address,uint256)" "$ME" "$A3" 70000000000000000000000 --from "$ME" --unlocked --rpc-url "$L" >/dev/null 2>&1 || fail "resize failed"
+[[ "$(alloc_tokens "$A3")" == "70000000000000000000000" ]] && pass "5.2 healthy resize 50k → 70k (no reclaim)" || fail "5.2 resize did not take"
+cast rpc evm_increaseTime 29000 --rpc-url "$L">/dev/null; cast rpc evm_mine --rpc-url "$L">/dev/null   # > maxPOIStaleness
+OUT=$(cast send "$SS" "resizeAllocation(address,address,uint256)" "$ME" "$A3" 60000000000000000000000 --from "$ME" --unlocked --rpc-url "$L" --json 2>/dev/null)
+[[ "$(reclaim_of "$OUT")" == "$STALE_H" ]] && pass "5.1 stale resize → STALE_POI reclaim (pending rewards cleared)" || fail "5.1 reason was $(reclaim_of "$OUT")"
+
+say "RewardsConditions 3.x — NO_ALLOCATED_TOKENS on a signalled, zero-allocation subgraph"
+cast send "$RM" "setReclaimAddress(bytes32,address)" "$NOALLOC_H" "$RECLAIM" --from "$GOV" --unlocked --rpc-url "$L" >/dev/null 2>&1
+cast send "$RM" "onSubgraphAllocationUpdate(bytes32)" "$NOALLOC_DEP" --from "$ME" --unlocked --rpc-url "$L" >/dev/null 2>&1
+cast rpc anvil_mine 1500 --rpc-url "$L">/dev/null; cast rpc evm_increaseTime 3000 --rpc-url "$L">/dev/null; cast rpc evm_mine --rpc-url "$L">/dev/null
+OUT=$(cast send "$RM" "onSubgraphAllocationUpdate(bytes32)" "$NOALLOC_DEP" --from "$ME" --unlocked --rpc-url "$L" --json 2>/dev/null)
+[[ "$(reclaim_of "$OUT")" == "$NOALLOC_H" ]] && pass "3.2 signalled+unallocated → RewardsReclaimed reason NO_ALLOCATED_TOKENS" || fail "3.2 reason was $(reclaim_of "$OUT")"
+
 say "ReoTestPlan — multi-indexer batch renewal + retention/removal (production REO)"
 cast send "$RM" "setProviderEligibilityOracle(address)" "$REO" --from "$GOV" --unlocked --rpc-url "$L" >/dev/null 2>&1
 cast send "$REO" "grantRole(bytes32,address)" "$ORACLE_ROLE" "$ME" --from "$OP" --unlocked --rpc-url "$L" >/dev/null 2>&1
@@ -89,4 +108,4 @@ cast send "$REO" "removeExpiredIndexer(address)" "$IDX2" --from "$ME" --unlocked
 CNT1=$(cast call "$REO" "getIndexerCount()(uint256)" --rpc-url "$L"|awk '{print $1}')
 { [[ "$RES" == "true" ]] && (( CNT1 < CNT0 )); } && pass "removeExpiredIndexer(IDX2) → true, tracked count $CNT0 → $CNT1" || fail "removal failed (ret=$RES, $CNT0→$CNT1)"
 
-echo; echo "${G}${B}Gap scenarios verified${X} — CLOSE_ALLOCATION + balance, denial-4.4 precedence, batch renewal, retention/removal."
+echo; echo "${G}${B}Gap scenarios verified${X} — CLOSE_ALLOCATION+balance, denial-4.4, resize (healthy+stale→STALE_POI), NO_ALLOCATED_TOKENS, batch renewal, retention removal."

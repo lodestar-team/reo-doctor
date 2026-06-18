@@ -21,7 +21,7 @@ UPSTREAM=${UPSTREAM_RPC:-https://sepolia-rollup.arbitrum.io/rpc}
 PORT=${PORT:-8545}
 L="http://localhost:$PORT"
 ME=${1:-0xFA827DB4a3fA4E5403701c728198E102897AA249}
-GRT_AMOUNT=${2:-200000}   # whole GRT
+GRT_AMOUNT=${2:-400000}   # whole GRT (headroom for multi-allocation scenarios)
 
 # Sepolia addresses (GIP-0088 deployment)
 GRT=0xf8c05dcf59e8b28bfd5eed176c562bebcfc7ac04
