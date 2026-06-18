@@ -98,7 +98,7 @@ Plans: `IndexerTestGuide.md` (mock Sets 2m–4m, production Sets 2–5) on PR #1
 | Step | Status | Observation |
 |---|---|---|
 | Multi-indexer batch `renewIndexerEligibility([a,b])` | ✅ | both addresses get renewal times in one call |
-| Indexer retention removal (`removeExpiredIndexers`) | ❌ not verified | reverts after 365d oracle silence — the oracle is in fail-open so the entry still reads eligible and isn't removed. Would need the oracle kept fresh while one indexer ages past retention; not reproduced. |
+| Indexer retention removal (`removeExpiredIndexer`) | ✅ | function is **singular** + returns bool (never reverts) — my earlier `removeExpiredIndexers(address[])` didn't exist. With retention shortened to 60 s and a 61 s hop (no fail-open), `removeExpiredIndexer(IDX2)` returned `true` and tracked count dropped 2 → 1. |
 
 ## Observations / unexpected output (for collation)
 
@@ -123,9 +123,11 @@ Plans: `IndexerTestGuide.md` (mock Sets 2m–4m, production Sets 2–5) on PR #1
 - **Subgraph denial** (Cycles 2–5, 6.4, 4.4): complete (fork).
 - **Rewards conditions** (POI matrix, reclaim config + balance, below-min-signal,
   `CLOSE_ALLOCATION`): complete (fork); Cycle 7 skipped, CLI-driven resize not run.
-- **Multi-indexer batch renewal**: ✅. **Retention removal**: ❌ not verified (see above).
-- **Not run at all**: full BaselineTestPlan (query-serving/network-health), UI/Explorer
-  verification, `NO_ALLOCATED_TOKENS` end-to-end, observability event audit.
+- **Multi-indexer batch renewal**: ✅. **Retention removal**: ✅.
+- **Still not run**: full BaselineTestPlan (query-serving/network-health/attestations — needs a
+  live indexer stack), UI/Explorer verification (scriptable with Playwright, not yet done),
+  `NO_ALLOCATED_TOKENS` end-to-end (needs a deployment with zero *total* allocations — hard on
+  a fork of shared state), observability event audit, allocation resize lifecycle.
 - Reproducible end-to-end:
   `playground/{fund-fork,scenario-reo,scenario-reo-production,scenario-subgraph-denial,scenario-rewards-conditions,scenario-gaps}.sh`,
   `testnet/collect-test.sh`.
