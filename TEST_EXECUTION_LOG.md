@@ -1,6 +1,6 @@
 # REO Test Execution Log
 
-Step-by-step completion + observations for GraphOps coordination (for @Rem / @Ørjan).
+Step-by-step completion + observations for the REO test coordination (Edge & Node — @Rem).
 Plans: `IndexerTestGuide.md` (mock Sets 2m–4m, production Sets 2–5) on PR #1345.
 
 - **Indexer**: `0xfa827db4a3fa4e5403701c728198e102897aa249` (Arbitrum Sepolia)

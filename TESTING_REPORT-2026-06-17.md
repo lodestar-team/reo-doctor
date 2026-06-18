@@ -16,7 +16,7 @@ re-enabling eligibility restores collection. All claimed behaviour in `IndexerTe
 reproduced, including the exact revert string. Six documentation issues found (below).
 
 Because 100k testnet GRT proved unobtainable (mint is gated, no faucet), testing was done
-on a local fork of Sepolia carrying the real contracts — a method we recommend GraphOps
+on a local fork of Sepolia carrying the real contracts — a method we recommend Edge & Node
 add to the test materials, as it removes the funding barrier for every prospective tester.
 
 ---
@@ -55,7 +55,7 @@ on mainnet; live testing is Sepolia-only.
 
 ## Test results — live Arbitrum Sepolia
 
-Funded by GraphOps (Ørjan) with 100k GRT + ETH to indexer
+Funded by Ørjan with 100k GRT + ETH to indexer
 `0xfa827db4a3fa4e5403701c728198e102897aa249`.
 
 | Step | Action | Result |

@@ -42,7 +42,7 @@ rules now matter:
 
 `reo-doctor` reads the live on-chain state and surfaces both, plus the active oracle
 wiring, so you don't have to assemble a dozen `cast call`s by hand. It's also a fast way
-to follow GraphOps' [REO test plan](https://github.com/graphprotocol/contracts/pull/1345):
+to follow the [REO test plan](https://github.com/graphprotocol/contracts/pull/1345):
 it tells you which test set applies to the current deployment.
 
 ## Usage
