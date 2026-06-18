@@ -51,6 +51,41 @@ Plans: `IndexerTestGuide.md` (mock Sets 2m–4m, production Sets 2–5) on PR #1
 | Fail-open: oracle silent > timeout (7 d) | fork | ✅ | isEligible=true despite expired renewal (safety net engages) |
 | Freshly-activated oracle, validation on, never updated | fork | ✅ | isEligible=true (fail-open while oracle has never reported) |
 
+## SubgraphDenialTestPlan — Cycles 2–6 (self-served on fork)
+
+> `playground/scenario-subgraph-denial.sh` — SAO `setDenied` via impersonation, condition
+> decoded from the `POIPresented` event.
+
+| Step | Status | Observation |
+|---|---|---|
+| 2.1 baseline `isDenied=false` | ✅ | |
+| 2.2 SAO `setDenied(true)` → `isDenied=true` | ✅ | |
+| 2.3 redundant deny idempotent | ✅ | no revert |
+| 2.4 unauthorized deny reverts | ✅ | non-SAO blocked |
+| 3.1 accumulator freeze | ✅ | `getAccRewardsForSubgraph` unchanged while denied |
+| 4.1 POI on denied **defers** | ✅ | `POIPresented.condition = SUBGRAPH_DENIED`; `getRewards` frozen (~253 GRT preserved, snapshot not advanced) |
+| 6.4 denial precedence over ineligibility | ✅ | ineligible + denied → condition `SUBGRAPH_DENIED`, **not** `INDEXER_INELIGIBLE` |
+| 5.1 undeny → `isDenied=false` | ✅ | |
+| 5.2 accumulators resume | ✅ | grows again after undeny |
+| 5.3 pre-denial rewards claimable | ✅ | post-undeny collect condition = `NONE` (= `bytes32(0)`), normal claim |
+
+## RewardsConditionsTestPlan — Cycles 1, 2, 4 (self-served on fork)
+
+> `playground/scenario-rewards-conditions.sh` — governor via impersonation; POI condition
+> decoded from `POIPresented`.
+
+| Step | Status | Observation |
+|---|---|---|
+| 4.4 same-epoch collect → `ALLOCATION_TOO_YOUNG` | ✅ | defer; **same condition hash as our live 3m collect → independently confirms F1** |
+| 4.1 mature valid POI → `NONE` | ✅ | normal claim (`condition = bytes32(0)`) |
+| 4.3 zero POI → `ZERO_POI` | ✅ | reclaim path |
+| 4.2 POI after `maxPOIStaleness` → `STALE_POI` | ✅ | reclaim path (time-travelled +29000 s > 28800) |
+| 1.1 governor `setReclaimAddress` + readback | ✅ | |
+| 1.4 unauthorized `setReclaimAddress` reverts | ✅ | |
+| 2.3 below-min-signal freezes accumulator | ✅ | raised `minimumSubgraphSignal` → `getAccRewardsForSubgraph` frozen |
+| Cycle 7 (zero global signal) | ⏭️ | skipped — impractical on shared chain (doc says unit-test only) |
+| Cycles 3, 5.1–5.2, 6 (CLI-driven resize/lifecycle, events) | ◐ | core conditions covered; resize/CLI-specific steps not run |
+
 ## Observations / unexpected output (for collation)
 
 1. **F1 (most important)** — On the mock path, Set 3m's ineligible collect **does not revert** if
@@ -69,7 +104,11 @@ Plans: `IndexerTestGuide.md` (mock Sets 2m–4m, production Sets 2–5) on PR #1
 
 ## Coverage summary
 
-- Mock path (Sets 2m–4m): **complete** (3m's live revert pending the epoch roll; proven on fork).
-- Production path (Sets 2–5 + fail-open): **complete** (on fork).
-- Reproducible: `playground/{fund-fork,scenario-reo,scenario-reo-production}.sh`,
+- **Mock path** (Sets 2m–4m): complete (3m's live revert pending the epoch roll; proven on fork).
+- **Production path** (Sets 2–5 + fail-open): complete (fork).
+- **Subgraph denial** (Cycles 2–6.4): complete (fork).
+- **Rewards conditions** (POI matrix, reclaim config, below-min-signal): complete (fork);
+  Cycle 7 skipped (impractical), some CLI-driven resize/lifecycle steps not run.
+- Reproducible end-to-end:
+  `playground/{fund-fork,scenario-reo,scenario-reo-production,scenario-subgraph-denial,scenario-rewards-conditions}.sh`,
   `testnet/collect-test.sh`.
