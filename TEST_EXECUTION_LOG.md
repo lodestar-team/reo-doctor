@@ -82,8 +82,23 @@ Plans: `IndexerTestGuide.md` (mock Sets 2m–4m, production Sets 2–5) on PR #1
 | 1.1 governor `setReclaimAddress` + readback | ✅ | |
 | 1.4 unauthorized `setReclaimAddress` reverts | ✅ | |
 | 2.3 below-min-signal freezes accumulator | ✅ | raised `minimumSubgraphSignal` → `getAccRewardsForSubgraph` frozen |
+| 5.3 close reclaim → `CLOSE_ALLOCATION` | ✅ | `stopService` → `RewardsReclaimed` reason `CLOSE_ALLOCATION`; reclaim address balance 0 → 252.8 GRT (balance reconciliation) |
+| 1.5 reclaim balance reconciliation | ✅ | confirmed via the CLOSE_ALLOCATION reclaim above |
 | Cycle 7 (zero global signal) | ⏭️ | skipped — impractical on shared chain (doc says unit-test only) |
-| Cycles 3, 5.1–5.2, 6 (CLI-driven resize/lifecycle, events) | ◐ | core conditions covered; resize/CLI-specific steps not run |
+| 5.1–5.2 resize lifecycle (CLI `reallocate`) | ◐ | not run — needs indexer-agent CLI |
+
+### SubgraphDenial — additional (`scenario-gaps.sh`)
+
+| Step | Status | Observation |
+|---|---|---|
+| 4.4 zero POI on denied → `ZERO_POI` (reclaim, not defer) | ✅ | confirms denial does **not** shield a stale/zero POI; precedence holds |
+
+### ReoTestPlan — additional (`scenario-gaps.sh`)
+
+| Step | Status | Observation |
+|---|---|---|
+| Multi-indexer batch `renewIndexerEligibility([a,b])` | ✅ | both addresses get renewal times in one call |
+| Indexer retention removal (`removeExpiredIndexers`) | ❌ not verified | reverts after 365d oracle silence — the oracle is in fail-open so the entry still reads eligible and isn't removed. Would need the oracle kept fresh while one indexer ages past retention; not reproduced. |
 
 ## Observations / unexpected output (for collation)
 
@@ -105,9 +120,12 @@ Plans: `IndexerTestGuide.md` (mock Sets 2m–4m, production Sets 2–5) on PR #1
 
 - **Mock path** (Sets 2m–4m): complete (3m's live revert pending the epoch roll; proven on fork).
 - **Production path** (Sets 2–5 + fail-open): complete (fork).
-- **Subgraph denial** (Cycles 2–6.4): complete (fork).
-- **Rewards conditions** (POI matrix, reclaim config, below-min-signal): complete (fork);
-  Cycle 7 skipped (impractical), some CLI-driven resize/lifecycle steps not run.
+- **Subgraph denial** (Cycles 2–5, 6.4, 4.4): complete (fork).
+- **Rewards conditions** (POI matrix, reclaim config + balance, below-min-signal,
+  `CLOSE_ALLOCATION`): complete (fork); Cycle 7 skipped, CLI-driven resize not run.
+- **Multi-indexer batch renewal**: ✅. **Retention removal**: ❌ not verified (see above).
+- **Not run at all**: full BaselineTestPlan (query-serving/network-health), UI/Explorer
+  verification, `NO_ALLOCATED_TOKENS` end-to-end, observability event audit.
 - Reproducible end-to-end:
-  `playground/{fund-fork,scenario-reo,scenario-reo-production,scenario-subgraph-denial,scenario-rewards-conditions}.sh`,
+  `playground/{fund-fork,scenario-reo,scenario-reo-production,scenario-subgraph-denial,scenario-rewards-conditions,scenario-gaps}.sh`,
   `testnet/collect-test.sh`.
